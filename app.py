@@ -2,21 +2,27 @@ import streamlit as st
 import requests
 from datetime import datetime, timedelta
 import pandas as pd
-import time  # make sure this is near your other imports
+import time
 
-def get_current_slot():
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getSlot"
-    }
-    try:
-        response = requests.post(RPC_URL, json=payload, timeout=5)
-        return response.json()["result"]
-    except Exception:
-        return None
+st.set_page_config(page_title="Solana Epoch Tracker", layout="wide")
 
+st.title("🟢 Solana Epoch Tracker")
+
+RPC_URL = "https://api.mainnet-beta.solana.com"
+SLOTS_PER_EPOCH = 432000
+FIXED_SLOT_DURATION = 0.4  # For historical estimates only
+
+# ⏱️ Adaptive slot duration for live data
+@st.cache_data(ttl=300)
 def estimate_slot_duration(samples=5, interval_sec=10):
+    def get_current_slot():
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "getSlot"}
+        try:
+            response = requests.post(RPC_URL, json=payload, timeout=5)
+            return response.json()["result"]
+        except Exception:
+            return None
+
     slots = []
     for _ in range(samples):
         slot = get_current_slot()
@@ -27,42 +33,21 @@ def estimate_slot_duration(samples=5, interval_sec=10):
     if len(slots) >= 2:
         t0, s0 = slots[0]
         t1, s1 = slots[-1]
-        slot_diff = s1 - s0
-        time_diff = t1 - t0
-        if slot_diff > 0:
-            return time_diff / slot_diff
-    return SLOT_DURATION_SEC  # fallback
-
-
-st.set_page_config(page_title="Solana Epoch Tracker", layout="wide")
-
-st.title("🟢 Solana Epoch Tracker")
-
-RPC_URL = "https://api.mainnet-beta.solana.com"
-SLOT_DURATION_SEC = estimate_slot_duration()
-SLOTS_PER_EPOCH = 432000
+        if s1 != s0:
+            return (t1 - t0) / (s1 - s0)
+    return FIXED_SLOT_DURATION  # fallback
 
 def get_epoch_info():
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getEpochInfo"
-    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "getEpochInfo"}
     try:
         response = requests.post(RPC_URL, json=payload, timeout=5)
-        data = response.json()["result"]
-        return data
+        return response.json()["result"]
     except Exception as e:
         st.error(f"Failed to fetch epoch info: {e}")
         return None
 
 def get_block_height_for_slot(slot):
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getBlock",
-        "params": [slot]
-    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "getBlock", "params": [slot]}
     try:
         res = requests.post(RPC_URL, json=payload, timeout=5)
         block_data = res.json()["result"]
@@ -70,13 +55,13 @@ def get_block_height_for_slot(slot):
     except Exception:
         return None
 
-def render_current_epoch(data):
+def render_current_epoch(data, live_slot_duration):
     epoch = data['epoch']
     slot_index = data['slotIndex']
     slots_in_epoch = data['slotsInEpoch']
     remaining_slots = slots_in_epoch - slot_index
     pct_done = (slot_index / slots_in_epoch) * 100
-    time_remaining_sec = remaining_slots * SLOT_DURATION_SEC
+    time_remaining_sec = remaining_slots * live_slot_duration
     time_remaining = timedelta(seconds=time_remaining_sec)
     estimated_end = datetime.utcnow() + time_remaining
 
@@ -95,6 +80,7 @@ def render_current_epoch(data):
     st.metric("Estimated Epoch End (UTC)", estimated_end.strftime("%b %d, %Y, %H:%M UTC"))
     st.metric("Epoch Start Block", f"{start_block:,}" if start_block else "Unavailable")
     st.metric("Epoch End Block", f"{end_block:,}" if end_block else "Unavailable")
+    st.caption(f"🧠 Estimated Slot Duration: {live_slot_duration:.3f} seconds (adaptive)")
 
 def generate_full_epoch_history(current_epoch, current_starting_slot, slots_per_epoch=SLOTS_PER_EPOCH):
     rows = []
@@ -102,8 +88,8 @@ def generate_full_epoch_history(current_epoch, current_starting_slot, slots_per_
         epoch = current_epoch - i
         start_slot = current_starting_slot - (slots_per_epoch * i)
         end_slot = start_slot + slots_per_epoch - 1
-        estimated_start_time = datetime.utcnow() - timedelta(seconds=(slots_per_epoch * i * SLOT_DURATION_SEC))
-        estimated_end_time = estimated_start_time + timedelta(seconds=(slots_per_epoch * SLOT_DURATION_SEC))
+        estimated_start_time = datetime.utcnow() - timedelta(seconds=(slots_per_epoch * i * FIXED_SLOT_DURATION))
+        estimated_end_time = estimated_start_time + timedelta(seconds=(slots_per_epoch * FIXED_SLOT_DURATION))
 
         rows.append({
             "Epoch": epoch,
@@ -122,10 +108,11 @@ def render_historical_table(df):
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Download as CSV", data=csv, file_name="solana_epoch_history.csv", mime="text/csv")
 
-# Run dashboard
+# 🔄 Main dashboard logic
 data = get_epoch_info()
 if data:
-    render_current_epoch(data)
+    live_slot_duration = estimate_slot_duration()
+    render_current_epoch(data, live_slot_duration)
     historical_df = generate_full_epoch_history(
         current_epoch=data['epoch'],
         current_starting_slot=data['absoluteSlot'] - data['slotIndex']
