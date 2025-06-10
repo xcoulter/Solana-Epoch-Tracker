@@ -3,14 +3,13 @@ import requests
 from datetime import datetime, timedelta
 import pandas as pd
 
-st.set_page_config(page_title="Solana Epoch Tracker", layout="centered")
+st.set_page_config(page_title="Solana Epoch Tracker", layout="wide")
 
 st.title("🟢 Solana Epoch Tracker")
 
 RPC_URL = "https://api.mainnet-beta.solana.com"
-SLOT_DURATION_SEC = 0.4  # Approximate slot time
+SLOT_DURATION_SEC = 0.4
 SLOTS_PER_EPOCH = 432000
-NUM_PAST_EPOCHS = 5
 
 def get_epoch_info():
     payload = {
@@ -66,38 +65,37 @@ def render_current_epoch(data):
     st.metric("Epoch Start Block", f"{start_block:,}" if start_block else "Unavailable")
     st.metric("Epoch End Block", f"{end_block:,}" if end_block else "Unavailable")
 
-def generate_historical_epochs(current_epoch, current_starting_slot, slots_per_epoch=SLOTS_PER_EPOCH, num_epochs=NUM_PAST_EPOCHS):
+def generate_full_epoch_history(current_epoch, current_starting_slot, slots_per_epoch=SLOTS_PER_EPOCH):
     rows = []
-    for i in range(num_epochs):
+    for i in range(current_epoch + 1):
         epoch = current_epoch - i
         start_slot = current_starting_slot - (slots_per_epoch * i)
         end_slot = start_slot + slots_per_epoch - 1
         estimated_start_time = datetime.utcnow() - timedelta(seconds=(slots_per_epoch * i * SLOT_DURATION_SEC))
         estimated_end_time = estimated_start_time + timedelta(seconds=(slots_per_epoch * SLOT_DURATION_SEC))
 
-        start_block = get_block_height_for_slot(start_slot)
-        end_block = get_block_height_for_slot(end_slot)
-
         rows.append({
             "Epoch": epoch,
             "Start Slot": start_slot,
             "End Slot": end_slot,
-            "Start Block": start_block if start_block else "Unavailable",
-            "End Block": end_block if end_block else "Unavailable",
+            "Start Block": "Approximate",
+            "End Block": "Approximate",
             "Est. Start Time (UTC)": estimated_start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "Est. End Time (UTC)": estimated_end_time.strftime("%Y-%m-%d %H:%M:%S")
         })
     return pd.DataFrame(rows)
 
 def render_historical_table(df):
-    st.subheader("📜 Historical Epochs")
-    st.dataframe(df)
+    st.subheader("📜 Full Historical Epochs")
+    st.dataframe(df, use_container_width=True)
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download as CSV", data=csv, file_name="solana_epoch_history.csv", mime="text/csv")
 
 # Run dashboard
 data = get_epoch_info()
 if data:
     render_current_epoch(data)
-    historical_df = generate_historical_epochs(
+    historical_df = generate_full_epoch_history(
         current_epoch=data['epoch'],
         current_starting_slot=data['absoluteSlot'] - data['slotIndex']
     )
