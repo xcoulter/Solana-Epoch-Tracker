@@ -2,13 +2,44 @@ import streamlit as st
 import requests
 from datetime import datetime, timedelta
 import pandas as pd
+import time  # make sure this is near your other imports
+
+def get_current_slot():
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getSlot"
+    }
+    try:
+        response = requests.post(RPC_URL, json=payload, timeout=5)
+        return response.json()["result"]
+    except Exception:
+        return None
+
+def estimate_slot_duration(samples=5, interval_sec=10):
+    slots = []
+    for _ in range(samples):
+        slot = get_current_slot()
+        if slot is not None:
+            slots.append((time.time(), slot))
+        time.sleep(interval_sec)
+
+    if len(slots) >= 2:
+        t0, s0 = slots[0]
+        t1, s1 = slots[-1]
+        slot_diff = s1 - s0
+        time_diff = t1 - t0
+        if slot_diff > 0:
+            return time_diff / slot_diff
+    return SLOT_DURATION_SEC  # fallback
+
 
 st.set_page_config(page_title="Solana Epoch Tracker", layout="wide")
 
 st.title("🟢 Solana Epoch Tracker")
 
 RPC_URL = "https://api.mainnet-beta.solana.com"
-SLOT_DURATION_SEC = 0.4
+SLOT_DURATION_SEC = estimate_slot_duration()
 SLOTS_PER_EPOCH = 432000
 
 def get_epoch_info():
